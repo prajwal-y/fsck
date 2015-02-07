@@ -1,11 +1,6 @@
-/* $cmuPDL: readwrite.c,v 1.3 2010/02/27 11:38:39 rajas Exp $ */
-/* $cmuPDL: readwrite.c,v 1.4 2014/01/26 21:16:20 avjaltad Exp $ */
-/* readwrite.c
- *
- * Code to read and write sectors to a "disk" file.
- * This is a support file for the "fsck" storage systems laboratory.
- *
- * author: YOUR NAME HERE
+/* fsck.c
+ * Utility to identify, parse, read, and manipulate an on-disk image of an ext2 file system.
+ * author: Prajwal Yadapadithaya (Andrew ID: pyadapad)
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -96,7 +91,7 @@ void read_sectors (int64_t start_sector, unsigned int num_sectors, void *into)
     }
 }
 
-
+		
 /* write_sectors: write a buffer into a specified number of sectors.
  *
  * inputs:
