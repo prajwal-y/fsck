@@ -2,6 +2,7 @@
  * Utility to identify, parse, read, and manipulate an on-disk image of an ext2 file system.
  * author: Prajwal Yadapadithaya (Andrew ID: pyadapad)
  */
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>     /* for memcpy() */
@@ -19,6 +20,8 @@
 extern int64_t lseek64(int, int64_t, int);
 
 const unsigned int sector_size_bytes = 512;
+
+const unsigned int partition_record_size = 16;
 
 static int device;  /* disk file descriptor */
 
@@ -137,30 +140,102 @@ void write_sectors (int64_t start_sector, unsigned int num_sectors, void *from)
     }
 }
 
+/**
+ * Given a partition entry, read it and extract required info
+ */
+void read_partition_entry(char *part_buf) {
+	int type;	
+	unsigned int start_sector, length;
+
+	//Extract type
+	type = (int)part_buf[4] & 0xFF;
+
+	//Extract start address
+	start_sector = ((int)part_buf[8] << 24) | ((int)part_buf[9] << 16) | ((int)part_buf[10] << 8) | ((int)part_buf[11]);
+
+	//Extract end address
+	length = ((int)part_buf[12] << 24) | ((int)part_buf[13] << 16) | ((int)part_buf[14] << 8) | ((int)part_buf[15]);
+
+	printf("0x%02X %u %u\n", type, start_sector, length * sector_size_bytes);
+}
+
 
 int main (int argc, char **argv)
 {
-    /* This is a sample program.  If you want to print out sector 57 of
-     * the disk, then run the program as:
-     *
-     *    ./readwrite disk 57
-     *
-     * You'll of course want to replace this with your own functions.
-     */
+	int opt;	
+	int partition_no;
+	char *disk_image;
+	//Check if number of arguments is 5
+	if(argc < 5) {
+		printf("Incorrect number of arguments. Usage:  ./myfsck -p <partition number> -i </path/to/disk/image>\n");
+		exit(EXIT_FAILURE);
+	}
+	//Read command line arguments
+	while ((opt = getopt(argc, argv, "p:i:")) != -1) {
+    	switch (opt)
+	    {
+    		case 'p':
+        		partition_no = atoi(optarg);
+		        break;
+	    	case 'i':
+    	    	disk_image = optarg;
+	        	break;
+		    default:
+    	    	fprintf(stderr, "Usage: ./myfsck -p <partition number> -i </path/to/disk/image>\n");
+        		exit(EXIT_FAILURE);
+    	}
+	}
+    
+	unsigned char buf[sector_size_bytes];        /* temporary buffer */
+	unsigned char part_buf[partition_record_size];
+    int	the_sector;                     /* IN: sector to read */
+	int partition_addr;	//Index of partition in buf
+	int i;
 
-    unsigned char buf[sector_size_bytes];        /* temporary buffer */
-    int           the_sector;                     /* IN: sector to read */
-
-    if ((device = open(argv[1], O_RDWR)) == -1) {
+    if ((device = open(disk_image, O_RDWR)) == -1) {
         perror("Could not open device file");
         exit(-1);
     }
 
-    the_sector = atoi(argv[2]);
-    printf("Dumping sector %d:\n", the_sector);
+	//Reading sector 0 for MBR
+    the_sector = 0;
+    //printf("Dumping sector %d:\n", the_sector);
     read_sectors(the_sector, 1, buf);
-    print_sector(buf);
 
+	//Partition 1
+	partition_addr = 446 + (partition_no * 16);
+	for(i = partition_addr; i < partition_addr + partition_record_size; i++) {
+		part_buf[i-partition_addr] = buf[i];
+		printf("%02x", buf[i]);
+	}
+
+	printf("\n");	
+	read_partition_entry(part_buf);
+
+	/*
+	//Partition 2
+    partition_addr = 462;
+    for(i = partition_addr; i < partition_addr + 16; i++) {
+        printf("%02x", buf[i]);
+    }
+
+	printf("\n");
+
+	//Partition 3
+    partition_addr = 478;
+    for(i = partition_addr; i < partition_addr + 16; i++) {
+        printf("%02x", buf[i]);
+    }
+
+	printf("\n");
+
+	//Partition 4
+    partition_addr = 494;
+    for(i = partition_addr; i < partition_addr + 16; i++) {
+        printf("%02x", buf[i]);
+    }
+
+	printf("\n");*/
     close(device);
     return 0;
 }
