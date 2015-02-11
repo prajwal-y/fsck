@@ -26,6 +26,8 @@ const unsigned int partition_record_size = 16;
 
 static int device;  /* disk file descriptor */
 
+static int ebr_offset = 0;
+
 typedef struct partition_entry {
 	unsigned int partition_no;
 	unsigned int type;
@@ -165,11 +167,12 @@ partition_entry *read_partition_entry(char *part_buf, int partition_no, int sect
 	entry->type = type;
 	
 	//Extract start address
-	//printf("%x, %x, %x, %x\n", part_buf[11]&0xFF, part_buf[10]&0xFF, part_buf[9]&0xFF, part_buf[8]&0xFF);
-	entry->start_sector = ((((int)part_buf[11]&0xFF) << 24) | (((int)part_buf[10]&0xFF) << 16) | (((int)part_buf[9]&0xFF) << 8) | ((int)part_buf[8])&0xFF) + sector_offset;
+	if(type == 0x05)
+		entry->start_sector = ((((int)part_buf[11]&0xFF) << 24) | (((int)part_buf[10]&0xFF) << 16) | (((int)part_buf[9]&0xFF) << 8) | ((int)part_buf[8])&0xFF) + ebr_offset;
+	else
+		entry->start_sector = ((((int)part_buf[11]&0xFF) << 24) | (((int)part_buf[10]&0xFF) << 16) | (((int)part_buf[9]&0xFF) << 8) | ((int)part_buf[8])&0xFF) + sector_offset;
 
 	//Extract end address
-	//printf("%x, %x, %x, %x\n", part_buf[15]&0xFF, part_buf[14]&0xFF, part_buf[13]&0xFF, part_buf[12]&0xFF);
 	entry->length = (((int)part_buf[15]&0xFF) << 24) | (((int)part_buf[14]&0xFF) << 16) | (((int)part_buf[13]&0xFF) << 8) | ((int)part_buf[12]&0xFF);
 	
 	entry->next = NULL;
@@ -180,7 +183,7 @@ partition_entry *read_partition_entry(char *part_buf, int partition_no, int sect
 /**
  * Given a sector and partition number, read it and extract required info
  */
-partition_entry *read_partition_table(int sector, int partition_no, partition_entry *entry, int sector_offset) {
+partition_entry *read_partition_table(int sector, int partition_no, int sector_offset) {
 	int partition_addr, i;
 	unsigned char part_buf[partition_record_size];
 	unsigned char buf[sector_size_bytes];        /* temporary buffer */
@@ -192,18 +195,10 @@ partition_entry *read_partition_table(int sector, int partition_no, partition_en
 	for(i = partition_addr; i < partition_addr + partition_record_size; i++) {
 		part_buf[i-partition_addr] = buf[i];
 	}
-	//printf("%s\n",part_buf);
 
 	partition_entry *part = read_partition_entry(part_buf, partition_no, sector_offset);
 
-	if(entry == NULL) {
-		entry = part;
-	}
-	else if(part != NULL) {
-		entry->next = part;
-		entry = entry->next;
-	}
-	return entry;
+	return part;
 }
 
 void print_ll(partition_entry *node) {
@@ -220,9 +215,12 @@ partition_entry *read_sector_partitions(int sector, int sector_offset) {
 	partition_entry *entry = NULL;
 	partition_entry *first = NULL; 
 
-	//4 partitions in a sector
-	for(i = 1; i <= 4; i++) {
-		partition_entry *temp = read_partition_table(sector, i, entry, sector_offset);
+	int part_count = 4;
+	if(sector_offset != 0)
+		part_count = 2;
+
+	for(i = 1; i <= part_count; i++) {
+		partition_entry *temp = read_partition_table(sector, i, sector_offset);
 		if(entry == NULL) {
 			entry = temp;
 			first = entry;
@@ -234,9 +232,12 @@ partition_entry *read_sector_partitions(int sector, int sector_offset) {
 	}
 
 	partition_entry *temp = first;
-	while(temp != entry->next) {
+	partition_entry *end = entry;
+	while(temp != end->next) {
 		//If EBR, check the corresponding sector accordingly
 		if(temp->type == 5) {
+			if(ebr_offset == 0)
+				ebr_offset = temp->start_sector;
 			entry->next = read_sector_partitions(temp->start_sector, temp->start_sector);
 			//Delete entries that are not needed
 			partition_entry *cur = entry->next;
@@ -258,6 +259,8 @@ partition_entry *read_sector_partitions(int sector, int sector_offset) {
 				cur = cur->next;
 			}
 		}
+		while(entry->next != NULL)
+			entry = entry->next;
 		temp = temp->next;
 	}
 	
