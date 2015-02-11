@@ -206,6 +206,14 @@ partition_entry *read_partition_table(int sector, int partition_no, partition_en
 	return entry;
 }
 
+void print_ll(partition_entry *node) {
+	while(node != NULL) {
+		printf("%02x, %d -> ", node->type, node->start_sector);
+		node = node->next;
+	}
+	printf("\n");
+}
+
 partition_entry *read_sector_partitions(int sector, int sector_offset) {
 
 	int i;
@@ -230,6 +238,25 @@ partition_entry *read_sector_partitions(int sector, int sector_offset) {
 		//If EBR, check the corresponding sector accordingly
 		if(temp->type == 5) {
 			entry->next = read_sector_partitions(temp->start_sector, temp->start_sector);
+			//Delete entries that are not needed
+			partition_entry *cur = entry->next;
+			partition_entry *prev = entry;
+			while(cur != NULL) {
+				if(cur->type == 5 || cur->type == 0) {
+					if(cur->next == NULL) {
+						free(cur);
+						prev->next = NULL;
+					}
+					else {
+						prev->next = cur->next;
+						free(cur);
+						cur = prev->next;
+						continue;
+					}
+				}
+				prev = cur;
+				cur = cur->next;
+			}
 		}
 		temp = temp->next;
 	}
@@ -270,13 +297,19 @@ int main (int argc, char **argv)
     }
 
 	partition_entry *entry = read_sector_partitions(0, 0);
-	while(entry != NULL) {
-		printf("%02x %d %d\n", entry->type, entry->start_sector, entry->length);
-		entry = entry->next;
-	}
+	close(device);
 
-    close(device);
-    return 0;
+	int count = 1;
+	while(entry != NULL) {
+		if(partition_no == count) {
+			printf("0x%02X %d %d\n", entry->type, entry->start_sector, entry->length);
+			return 0;
+		}
+		entry = entry->next;
+		count++;
+	}
+	printf("-1\n");
+    return EX_DATAERR;
 }
 
 /* EOF */
