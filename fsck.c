@@ -11,6 +11,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <inttypes.h>
+#include <sysexits.h>
 
 #if defined(__FreeBSD__)
 #define lseek64 lseek
@@ -24,6 +25,14 @@ const unsigned int sector_size_bytes = 512;
 const unsigned int partition_record_size = 16;
 
 static int device;  /* disk file descriptor */
+
+typedef struct partition_entry {
+	unsigned int partition_no;
+	unsigned int type;
+	unsigned int start_sector;
+	unsigned int length;
+	struct partition_entry *next;
+}partition_entry;
 
 /* print_sector: print the contents of a buffer containing one sector.
  *
@@ -70,12 +79,12 @@ void read_sectors (int64_t start_sector, unsigned int num_sectors, void *into)
     int64_t sector_offset;
     ssize_t bytes_to_read;
 
-    if (num_sectors == 1) {
+    /*if (num_sectors == 1) {
         printf("Reading sector %"PRId64"\n", start_sector);
     } else {
         printf("Reading sectors %"PRId64"--%"PRId64"\n",
                start_sector, start_sector + (num_sectors - 1));
-    }
+    }*/
 
     sector_offset = start_sector * sector_size_bytes;
 
@@ -141,22 +150,91 @@ void write_sectors (int64_t start_sector, unsigned int num_sectors, void *from)
 }
 
 /**
- * Given a partition entry, read it and extract required info
+ * Read a partition entry and save the required fields for partition table
  */
-void read_partition_entry(char *part_buf) {
-	int type;	
-	unsigned int start_sector, length;
+partition_entry *read_partition_entry(char *part_buf, int partition_no) {
 
-	//Extract type
-	type = (int)part_buf[4] & 0xFF;
+	int type = (int)part_buf[4] & 0xFF;
+	if(type != 0x82 && type != 0x00 && type != 0x83 && type != 0x05) {
+        return NULL;
+    }
 
+	partition_entry *entry = (partition_entry*)malloc(sizeof(partition_entry));
+	entry->partition_no = partition_no;
+	//Save type
+	entry->type = type;
+	
 	//Extract start address
-	start_sector = ((int)part_buf[8] << 24) | ((int)part_buf[9] << 16) | ((int)part_buf[10] << 8) | ((int)part_buf[11]);
+	printf("%x, %x, %x, %x\n", part_buf[11]&0xFF, part_buf[10]&0xFF, part_buf[9]&0xFF, part_buf[8]&0xFF);
+	entry->start_sector = ((((int)part_buf[11]&0xFF) << 24) | (((int)part_buf[10]&0xFF) << 16) | (((int)part_buf[9]&0xFF) << 8) | ((int)part_buf[8])&0xFF);
 
 	//Extract end address
-	length = ((int)part_buf[12] << 24) | ((int)part_buf[13] << 16) | ((int)part_buf[14] << 8) | ((int)part_buf[15]);
+	printf("%x, %x, %x, %x\n", part_buf[15]&0xFF, part_buf[14]&0xFF, part_buf[13]&0xFF, part_buf[12]&0xFF);
+	entry->length = (((int)part_buf[15]&0xFF) << 24) | (((int)part_buf[14]&0xFF) << 16) | (((int)part_buf[13]&0xFF) << 8) | ((int)part_buf[12]&0xFF);
+	
+	entry->next = NULL;
 
-	printf("0x%02X %u %u\n", type, start_sector, length * sector_size_bytes);
+	return entry;
+}
+
+/**
+ * Given a sector and partition number, read it and extract required info
+ */
+partition_entry *read_partition_table(int sector, int partition_no, partition_entry *entry) {
+	int partition_addr, i;
+	unsigned char part_buf[partition_record_size];
+	unsigned char buf[sector_size_bytes];        /* temporary buffer */
+
+    read_sectors(sector, 1, buf); //Read sector into buf
+
+	//Extract the partition to be read
+	partition_addr = 446 + ((partition_no - 1) * 16);
+	for(i = partition_addr; i < partition_addr + partition_record_size; i++) {
+		part_buf[i-partition_addr] = buf[i];
+	}
+	 printf("%s\n",part_buf);
+
+	partition_entry *part = read_partition_entry(part_buf, partition_no);
+
+	if(entry == NULL) {
+		entry = part;
+	}
+	else if(part != NULL) {
+		entry->next = part;
+		entry = entry->next;
+	}
+	return entry;
+}
+
+partition_entry *read_sector_partitions(int sector) {
+
+	int i;
+	partition_entry *entry = NULL;
+	partition_entry *first = NULL; 
+
+	//4 partitions in a sector
+	for(i = 1; i <= 4; i++) {
+		partition_entry *temp = read_partition_table(sector, i, entry);
+		if(entry == NULL) {
+			entry = temp;
+			first = entry;
+		}
+		else if(temp != NULL){
+			entry->next = temp;
+			entry = entry->next;
+		}
+	}
+
+	partition_entry *temp = first;
+	while(temp != entry->next) {
+		//If EBR, check the corresponding sector accordingly
+		if(temp->type == 5) {
+			entry->next = read_sector_partitions(temp->start_sector);
+		}
+		temp = temp->next;
+	}
+	
+	return first;
 }
 
 
@@ -168,7 +246,7 @@ int main (int argc, char **argv)
 	//Check if number of arguments is 5
 	if(argc < 5) {
 		printf("Incorrect number of arguments. Usage:  ./myfsck -p <partition number> -i </path/to/disk/image>\n");
-		exit(EXIT_FAILURE);
+		exit(EX_USAGE);
 	}
 	//Read command line arguments
 	while ((opt = getopt(argc, argv, "p:i:")) != -1) {
@@ -182,60 +260,21 @@ int main (int argc, char **argv)
 	        	break;
 		    default:
     	    	fprintf(stderr, "Usage: ./myfsck -p <partition number> -i </path/to/disk/image>\n");
-        		exit(EXIT_FAILURE);
+        		exit(EX_USAGE);
     	}
-	}
-    
-	unsigned char buf[sector_size_bytes];        /* temporary buffer */
-	unsigned char part_buf[partition_record_size];
-    int	the_sector;                     /* IN: sector to read */
-	int partition_addr;	//Index of partition in buf
-	int i;
+	} 
 
     if ((device = open(disk_image, O_RDWR)) == -1) {
         perror("Could not open device file");
         exit(-1);
     }
 
-	//Reading sector 0 for MBR
-    the_sector = 0;
-    //printf("Dumping sector %d:\n", the_sector);
-    read_sectors(the_sector, 1, buf);
-
-	//Partition 1
-	partition_addr = 446 + (partition_no * 16);
-	for(i = partition_addr; i < partition_addr + partition_record_size; i++) {
-		part_buf[i-partition_addr] = buf[i];
-		printf("%02x", buf[i]);
+	partition_entry *entry = read_sector_partitions(0);
+	while(entry != NULL) {
+		printf("%02x %d %d\n", entry->type, entry->start_sector, entry->length);
+		entry = entry->next;
 	}
 
-	printf("\n");	
-	read_partition_entry(part_buf);
-
-	/*
-	//Partition 2
-    partition_addr = 462;
-    for(i = partition_addr; i < partition_addr + 16; i++) {
-        printf("%02x", buf[i]);
-    }
-
-	printf("\n");
-
-	//Partition 3
-    partition_addr = 478;
-    for(i = partition_addr; i < partition_addr + 16; i++) {
-        printf("%02x", buf[i]);
-    }
-
-	printf("\n");
-
-	//Partition 4
-    partition_addr = 494;
-    for(i = partition_addr; i < partition_addr + 16; i++) {
-        printf("%02x", buf[i]);
-    }
-
-	printf("\n");*/
     close(device);
     return 0;
 }
