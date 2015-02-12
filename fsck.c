@@ -49,7 +49,7 @@ typedef struct partition_entry {
  */
 void print_sector (unsigned char *buf)
 {
-    int i;
+    unsigned int i;
     for (i = 0; i < sector_size_bytes; i++) {
         printf("%02x", buf[i]);
         if (!((i+1) % 32))
@@ -184,7 +184,7 @@ partition_entry *read_partition_entry(char *part_buf, int partition_no, int sect
  * Given a sector and partition number, read it and extract required info
  */
 partition_entry *read_partition_table(int sector, int partition_no, int sector_offset) {
-	int partition_addr, i;
+	unsigned int partition_addr, i;
 	unsigned char part_buf[partition_record_size];
 	unsigned char buf[sector_size_bytes];        /* temporary buffer */
 
@@ -259,7 +259,7 @@ partition_entry *read_sector_partitions(int sector, int sector_offset) {
 				cur = cur->next;
 			}
 		}
-		while(entry->next != NULL)
+		while(entry->next != NULL) //Not needed, can be removed.
 			entry = entry->next;
 		temp = temp->next;
 	}
