@@ -1,6 +1,6 @@
 
 all:
-	gcc fsck.c -o myfsck
+	gcc -W fsck.c -o myfsck
 
 clean:
 	rm myfsck
