@@ -267,11 +267,37 @@ partition_entry *read_sector_partitions(int sector, int sector_offset) {
 	return first;
 }
 
+/**
+* Get the partition entry given partition number
+**/
+partition_entry *get_partition_entry(partition_entry *head, unsigned int partition_no) {	
+	unsigned int count = 1;
+	while(head != NULL) {
+		if(partition_no == count) {
+			return head;
+		}
+		head = head->next;
+		count++;
+	}
+	return NULL;
+}
+
+/****************************************************************/
+
+void read_superblock(partition_entry *partition) {
+	unsigned char buf[4*sector_size_bytes];
+	read_sectors(partition->start_sector, 4, buf);
+	printf("0x%02X 0x%02X\n", buf[1080], buf[1081]);
+}
+
+
+
+/****************************************************************/
 
 int main (int argc, char **argv)
 {
 	int opt;	
-	int partition_no;
+	int partition_no = -1;
 	char *disk_image;
 	//Check if number of arguments is 5
 	if(argc < 5) {
@@ -300,19 +326,20 @@ int main (int argc, char **argv)
     }
 
 	partition_entry *entry = read_sector_partitions(0, 0);
-	close(device);
 
-	int count = 1;
-	while(entry != NULL) {
-		if(partition_no == count) {
-			printf("0x%02X %d %d\n", entry->type, entry->start_sector, entry->length);
-			return 0;
+	if(partition_no != -1) {
+		partition_entry *partition = get_partition_entry(entry, partition_no);
+		if(partition != NULL) {
+			printf("0x%02X %d %d\n", partition->type, partition->start_sector, partition->length);
 		}
-		entry = entry->next;
-		count++;
+		else {
+			printf("-1\n");
+	        return EX_DATAERR;
+		}
 	}
-	printf("-1\n");
-    return EX_DATAERR;
+	read_superblock(entry);
+	close(device);
+	return 0;
 }
 
 /* EOF */
