@@ -30,6 +30,8 @@ static int ebr_offset = 0;
 
 static int block_size = 1024;
 
+static unsigned char superblock_buf[6*512]; //Save the superblock and group descriptor
+
 typedef struct partition_entry {
 	unsigned int partition_no;
 	unsigned int type;
@@ -297,14 +299,16 @@ unsigned int get_block_starting_byte(int block_no) {
 	return block_no * block_size;
 }
 
-unsigned int get_inode_starting_byte(char *buf, unsigned int inode_no) {
+//Given an inode number, return its starting byte (offset)
+unsigned int get_inode_starting_byte(unsigned int inode_no) {
 	//[(block size)*(first inode block number) + (size of inode structure * (inode number - 1))]
-	return (block_size * getValueFromBytes(buf, 2048+8, 4)) + (getValueFromBytes(buf, 1024+88, 2) * (inode_no-1));
+	return (block_size * getValueFromBytes(superblock_buf, 2048+8, 4)) + (getValueFromBytes(superblock_buf, 1024+88, 2) * (inode_no-1));
 }
 
-unsigned int get_inode_number(char *buf, unsigned int offset) {
+//Given offset, return the inode number
+unsigned int get_inode_number(unsigned int offset) {
 	//[((offset - ((block size)*(first inode block number)))/size of inode structure)+1]
-	return ((offset - (block_size * getValueFromBytes(buf, 2048+8, 4)))/getValueFromBytes(buf, 1024+88, 2))+1;
+	return ((offset - (block_size * getValueFromBytes(superblock_buf, 2048+8, 4)))/getValueFromBytes(superblock_buf, 1024+88, 2))+1;
 }
 
 /*
@@ -313,29 +317,28 @@ unsigned int get_inode_number(char *buf, unsigned int offset) {
 void read_superblock(partition_entry *partition) {
 	//Reads both superblock (1024 bytes into partition 1) 
 	//and group descriptor (2048 bytes into partition 1)
-	unsigned char buf[6*sector_size_bytes];
-	read_sectors(partition->start_sector, 6, buf);
+	read_sectors(partition->start_sector, 6, superblock_buf);
 	//Magic number in superblock
-	printf("Magic number: 0x%02X 0x%02X\n", buf[1080], buf[1081]);
+	printf("Magic number: 0x%02X 0x%02X\n", superblock_buf[1080], superblock_buf[1081]);
 	//Total number of inodes
-	printf("Inode count: %d\n", getValueFromBytes(buf, 1024, 4));
+	printf("Inode count: %d\n", getValueFromBytes(superblock_buf, 1024, 4));
 	//Filesystem size in blocks
-	printf("Filesystem size in blocks: %d\n", getValueFromBytes(buf, 1024+4, 4));
+	printf("Filesystem size in blocks: %d\n", getValueFromBytes(superblock_buf, 1024+4, 4));
 	//Number of reserved blocks
-	printf("Number of reserved blocks: %d\n", getValueFromBytes(buf, 1024+8, 4));
+	printf("Number of reserved blocks: %d\n", getValueFromBytes(superblock_buf, 1024+8, 4));
 	//Free blocks counter
-	printf("Free blocks counter: %d\n", getValueFromBytes(buf, 1024+12, 4));
+	printf("Free blocks counter: %d\n", getValueFromBytes(superblock_buf, 1024+12, 4));
 	//Free inodes counter
-	printf("Free inodes counter: %d\n", getValueFromBytes(buf, 1024+16, 4));
+	printf("Free inodes counter: %d\n", getValueFromBytes(superblock_buf, 1024+16, 4));
 	//First useful block (Always 1)
-	printf("First useful block: 0x%02X 0x%02X 0x%02x 0x%02x\n", buf[1044], buf[1045], buf[1046], buf[1047]);
+	printf("First useful block: 0x%02X 0x%02X 0x%02x 0x%02x\n", superblock_buf[1044], superblock_buf[1045], superblock_buf[1046], superblock_buf[1047]);
 	//Block size
-	printf("Block size (0-1024, 1-2048 and so on): %d\n", getValueFromBytes(buf, 1024+24, 4));
+	printf("Block size (0-1024, 1-2048 and so on): %d\n", getValueFromBytes(superblock_buf, 1024+24, 4));
 	//Size of on disk inode structure
-	printf("Size of on disk inode structure: %d\n", getValueFromBytes(buf, 1024+88, 2));
+	printf("Size of on disk inode structure: %d\n", getValueFromBytes(superblock_buf, 1024+88, 2));
 
 	//Block of the first inode table (9th byte in the group descriptor)
-	printf("First inode table block and starting byte: %d, %d(%d)\n", getValueFromBytes(buf, 2048+8, 4), get_inode_starting_byte(buf,1), get_inode_number(buf, 5120));
+	printf("First inode table block and starting byte: %d, %d(%d)\n", getValueFromBytes(superblock_buf, 2048+8, 4), get_inode_starting_byte(1), get_inode_number(5120));
 }
 
 
