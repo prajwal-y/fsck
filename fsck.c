@@ -35,6 +35,7 @@ static unsigned char superblock_buf[6*512]; //Save the superblock and group desc
 
 static unsigned char inode_bitmap[1024];
 static unsigned char block_bitmap[1024];
+static struct ext2_super_block super_block;
 
 typedef struct partition_entry {
 	unsigned int partition_no;
@@ -305,25 +306,35 @@ unsigned int getValueFromBytes(char *buf, int index, int size) {
 		return ((((int)buf[index+1]&0xFF) << 8) | ((int)buf[index]&0xFF));
 }
 
+unsigned int get_inode_table_block_no(unsigned int inode_no) {
+	unsigned int group_index = (inode_no-1)/super_block.s_inodes_per_group;
+	unsigned int group_offset = (inode_no-1)%super_block.s_inodes_per_group;
+	printf("inode table block number for inode: %d: %d\n", inode_no, getValueFromBytes(superblock_buf, 2048+(group_index*32)+8, 4));
+	return getValueFromBytes(superblock_buf, 2048+(group_index*32)+8, 4);
+}
+
 unsigned int get_block_starting_byte(int block_no) {
 	return block_no * block_size;
 }
 
-unsigned int get_block_sector(partition_entry *entry, unsigned int block_no) {
+unsigned int get_block_sector(partition_entry *partition, unsigned int block_no) {
 	//printf("In get block_sector: %d, %d\n", entry->start_sector, block_no);
-	return (entry->start_sector + (block_no*(block_size/sector_size_bytes)));
+	return (partition->start_sector + (block_no*(block_size/sector_size_bytes)));
 }
 
 //Given an inode number, return its starting byte (offset)
 unsigned int get_inode_starting_byte(unsigned int inode_no) {
 	//[(block size)*(first inode block number) + (size of inode structure * (inode number - 1))]
-	return (block_size * getValueFromBytes(superblock_buf, 2048+8, 4)) + (getValueFromBytes(superblock_buf, 1024+88, 2) * (inode_no-1));
+	//return (block_size * getValueFromBytes(superblock_buf, 2048+8, 4)) + (getValueFromBytes(superblock_buf, 1024+88, 2) * (inode_no-1));
+	return (block_size * get_inode_table_block_no(inode_no)) + (super_block.s_inode_size * ((inode_no-1)%super_block.s_inodes_per_group));
 }
 
 //Given offset, return the inode number
 unsigned int get_inode_number(unsigned int offset) {
 	//[((offset - ((block size)*(first inode block number)))/size of inode structure)+1]
-	return ((offset - (block_size * getValueFromBytes(superblock_buf, 2048+8, 4)))/getValueFromBytes(superblock_buf, 1024+88, 2))+1;
+	//return ((offset - (block_size * ))/super_block.s_inode_size)+1;
+	//return ((offset - (block_size * get_inode_table_block_no(inode_no)))/super_block.s_inode_size)+1;
+	return 0;
 }
 
 /*
@@ -349,6 +360,8 @@ void scan_dir_data_block(partition_entry *partition, unsigned int block_no) {
 	}
 }
 
+
+
 /*
 * Read and return the data present in an inode
 */
@@ -358,13 +371,13 @@ inode_data read_inode(partition_entry *partition, unsigned int inode_no) {
 	int i;
     int inode_offset = get_inode_starting_byte(inode_no);
     int inode_sector = get_block_sector(partition, inode_offset/block_size);
-    //printf("inode sector: %d\n", inode_sector);
+    printf("inode offset, inode sector: %d, %d\n", inode_offset, inode_sector);
     //the root inode does not start at the beginning of the block
     int temp = inode_offset-((inode_sector - partition->start_sector)*sector_size_bytes);
     read_sectors(inode_sector, 1, buf);
     //print_sector(buf);
-    //printf("temp: %d\n", temp);
-    //printf("First data block: 0x%02X 0x%02X 0x%02x 0x%02x\n", buf[temp+40], buf[temp+41], buf[temp+42], buf[temp+43]);
+    printf("temp: %d\n", temp);
+    printf("First data block: 0x%02X 0x%02X 0x%02x 0x%02x\n", buf[temp+40], buf[temp+41], buf[temp+42], buf[temp+43]);
     //First data block
 	inode.inode_no = inode_no;
 	inode.file_length = getValueFromBytes(buf, temp+4, 4);
@@ -404,24 +417,44 @@ void read_superblock(partition_entry *partition) {
 	unsigned int inode_bitmap_sector = get_block_sector(partition, getValueFromBytes(superblock_buf, 2048+4, 4));
 	read_sectors(block_bitmap_sector, 1, block_bitmap); //Save the block bitmap
 	read_sectors(inode_bitmap_sector, 1, inode_bitmap); //Save the inode bitmap
+
 	//Magic number in superblock
 	printf("Magic number: 0x%02X 0x%02X\n", superblock_buf[1080], superblock_buf[1081]);
+	super_block.s_magic = getValueFromBytes(superblock_buf, 1080, 2);
+
 	//Total number of inodes
 	printf("Inode count: %d\n", getValueFromBytes(superblock_buf, 1024, 4));
+	super_block.s_inodes_count = getValueFromBytes(superblock_buf, 1024, 4);
+
 	//Filesystem size in blocks
 	printf("Filesystem size in blocks: %d\n", getValueFromBytes(superblock_buf, 1024+4, 4));
+
 	//Number of reserved blocks
 	printf("Number of reserved blocks: %d\n", getValueFromBytes(superblock_buf, 1024+8, 4));
+	super_block.s_r_blocks_count = getValueFromBytes(superblock_buf, 1024+8, 4);
+
 	//Free blocks counter
 	printf("Free blocks counter: %d\n", getValueFromBytes(superblock_buf, 1024+12, 4));
+	super_block.s_free_blocks_count = getValueFromBytes(superblock_buf, 1024+12, 4);
+
 	//Free inodes counter
 	printf("Free inodes counter: %d\n", getValueFromBytes(superblock_buf, 1024+16, 4));
+	super_block.s_free_inodes_count = getValueFromBytes(superblock_buf, 1024+16, 4);
+
+	//Number of inodes per group
+	printf("Number of inodes per group: %d\n", getValueFromBytes(superblock_buf, 1024+40, 4));
+	super_block.s_inodes_per_group = getValueFromBytes(superblock_buf, 1024+40, 4);
+
 	//First useful block (Always 1)
 	printf("First useful block: 0x%02X 0x%02X 0x%02x 0x%02x\n", superblock_buf[1044], superblock_buf[1045], superblock_buf[1046], superblock_buf[1047]);
+
 	//Block size
 	printf("Block size (0-1024, 1-2048 and so on): %d\n", getValueFromBytes(superblock_buf, 1024+24, 4));
+	super_block.s_log_block_size = getValueFromBytes(superblock_buf, 1024+24, 4);
+
 	//Size of on disk inode structure
 	printf("Size of on disk inode structure: %d\n", getValueFromBytes(superblock_buf, 1024+88, 2));
+	super_block.s_inode_size = getValueFromBytes(superblock_buf, 1024+88, 2);
 
 	//Block number of the block bitmap
 	printf("Block number of the block bitmap: %d\n", getValueFromBytes(superblock_buf, 2048+0, 4));
@@ -469,7 +502,12 @@ void read_root_inode(partition_entry *partition) {
 
 	printf("\n*********end of root inode details*******\n");
 
-	scan_dir_data_block(partition, first_data_block);
+	//Root inode data block
+	//scan_dir_data_block(partition, first_data_block);
+	
+	//lions inode data block
+	inode_data lions_inode = read_inode(partition, 4019);
+	scan_dir_data_block(partition, lions_inode.pointers_data_block[0]);
 }
 
 
