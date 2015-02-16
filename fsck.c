@@ -12,6 +12,7 @@
 #include <unistd.h>
 #include <inttypes.h>
 #include <sysexits.h>
+#include <math.h>
 #include "ext2_fs.h"
 
 #if defined(__FreeBSD__)
@@ -33,8 +34,6 @@ static unsigned int block_size = 1024;
 
 static unsigned char superblock_buf[6*512]; //Save the superblock and group descriptor
 
-static unsigned char inode_bitmap[1024];
-static unsigned char block_bitmap[1024];
 static struct ext2_super_block super_block;
 
 typedef struct partition_entry {
@@ -47,7 +46,9 @@ typedef struct partition_entry {
 
 typedef struct inode_data {
 	unsigned int inode_no;
+	unsigned int file_type;
 	unsigned int file_length;
+	unsigned int no_data_blocks;
 	unsigned int pointers_data_block[15];
 }inode_data;
 
@@ -367,20 +368,22 @@ void scan_dir_data_block(partition_entry *partition, unsigned int block_no) {
 */
 inode_data read_inode(partition_entry *partition, unsigned int inode_no) {
 	inode_data inode;
-	char buf[sector_size_bytes];
+	char buf[block_size];
 	int i;
     int inode_offset = get_inode_starting_byte(inode_no);
     int inode_sector = get_block_sector(partition, inode_offset/block_size);
     printf("inode offset, inode sector: %d, %d\n", inode_offset, inode_sector);
     //the root inode does not start at the beginning of the block
     int temp = inode_offset-((inode_sector - partition->start_sector)*sector_size_bytes);
-    read_sectors(inode_sector, 1, buf);
+    read_sectors(inode_sector, 2, buf);
     //print_sector(buf);
     printf("temp: %d\n", temp);
     printf("First data block: 0x%02X 0x%02X 0x%02x 0x%02x\n", buf[temp+40], buf[temp+41], buf[temp+42], buf[temp+43]);
     //First data block
 	inode.inode_no = inode_no;
+	inode.file_type = getValueFromBytes(buf, temp+0, 2);
 	inode.file_length = getValueFromBytes(buf, temp+4, 4);
+	inode.no_data_blocks = getValueFromBytes(buf, temp+28, 4);
 	for(i = 0; i < 15; i++) {
 		inode.pointers_data_block[i] = getValueFromBytes(buf, temp+40+(i*4), 4);
 	}
@@ -390,7 +393,8 @@ inode_data read_inode(partition_entry *partition, unsigned int inode_no) {
 /*
 *Check if the inode is set in inode bitmap (true=>1 and false=>0)
 */
-int check_inode_bitmap(unsigned int inode_no) {
+int check_inode_bitmap(partition_entry *partition, unsigned int inode_no) {
+	unsigned char inode_bitmap[1024];
 	unsigned int byte = inode_no/8;
 	unsigned int offset = 7-(inode_no%8);
 	return !(!(inode_bitmap[byte]&(1<<offset)));
@@ -399,10 +403,51 @@ int check_inode_bitmap(unsigned int inode_no) {
 /*
 *Check if the block is set in the block bitmap (true=>1 and false=>0)
 */
-int check_block_bitmap(unsigned int block_no) {
-	unsigned int byte = block_no/8;
-    unsigned int offset = 7-(block_no%8);
+int check_block_bitmap(partition_entry *partition, unsigned int block_no) {
+	if(block_no == 0)
+		return 0;
+	unsigned char block_bitmap[1024];
+	unsigned int group_index = (block_no-1)/super_block.s_blocks_per_group;
+    unsigned int block_offset = (block_no-1)%super_block.s_blocks_per_group;
+	//printf("group index, block_offset: %d, %d\n", group_index, block_offset);
+	//printf("block_no, block bitmap block number: %d, %d\n", block_no, getValueFromBytes(superblock_buf, 2048+(group_index*32)+0, 4));
+	unsigned int block_bitmap_sector = get_block_sector(partition, getValueFromBytes(superblock_buf, 2048+(group_index*32)+0, 4));
+	read_sectors(block_bitmap_sector, 1, block_bitmap);
+	unsigned int byte = block_offset/8;
+    unsigned int offset = 7-(block_offset%8);
     return !(!(block_bitmap[byte]&(1<<offset)));
+}
+
+/*
+*read the indirect blocks for bitmap count
+*/
+int get_indirect_data_block_count(partition_entry *partition, unsigned int block_no, unsigned int indirection_level) {
+	int count = 0, i = 0;
+	char buf[block_size];
+	unsigned int sector = get_block_sector(partition, block_no);
+	read_sectors(sector, 2, buf);
+	for(i = 0; i < 1024; i+=4) {
+		if(indirection_level == 3 || indirection_level == 2)
+			count += get_indirect_data_block_count(partition, getValueFromBytes(buf, i, 4), indirection_level-1);
+		else if(indirection_level == 1)
+			count += check_block_bitmap(partition, getValueFromBytes(buf, i, 4));
+	}
+	return count;
+}
+
+int get_data_block_count(partition_entry *partition, unsigned int *pointers) {
+	int count = 0, i = 0;
+	for(i = 0; i < 12; i++) {
+		if(check_block_bitmap(partition, pointers[i]))
+			count++;
+	}
+	if(pointers[12] != 0)
+		count += get_indirect_data_block_count(partition, pointers[12], 1);
+	if(pointers[13] != 0)
+        count += get_indirect_data_block_count(partition, pointers[13], 2); //Second level of indirection
+	if(pointers[14] != 0)
+        count += get_indirect_data_block_count(partition, pointers[14], 3); //Third level of indirection
+	return count;
 }
 
 /*
@@ -413,10 +458,10 @@ void read_superblock(partition_entry *partition) {
 	//Reads both superblock (1024 bytes into partition 1) 
 	//and group descriptor (2048 bytes into partition 1)
 	read_sectors(partition->start_sector, 6, superblock_buf);
-	unsigned int block_bitmap_sector = get_block_sector(partition, getValueFromBytes(superblock_buf, 2048+0, 4));
+	/*unsigned int block_bitmap_sector = get_block_sector(partition, getValueFromBytes(superblock_buf, 2048+0, 4));
 	unsigned int inode_bitmap_sector = get_block_sector(partition, getValueFromBytes(superblock_buf, 2048+4, 4));
 	read_sectors(block_bitmap_sector, 1, block_bitmap); //Save the block bitmap
-	read_sectors(inode_bitmap_sector, 1, inode_bitmap); //Save the inode bitmap
+	read_sectors(inode_bitmap_sector, 1, inode_bitmap); //Save the inode bitmap*/
 
 	//Magic number in superblock
 	printf("Magic number: 0x%02X 0x%02X\n", superblock_buf[1080], superblock_buf[1081]);
@@ -441,6 +486,10 @@ void read_superblock(partition_entry *partition) {
 	printf("Free inodes counter: %d\n", getValueFromBytes(superblock_buf, 1024+16, 4));
 	super_block.s_free_inodes_count = getValueFromBytes(superblock_buf, 1024+16, 4);
 
+	//Number of blocks per group
+	printf("Number of blocks per group: %d\n", getValueFromBytes(superblock_buf, 1024+32, 4));
+	super_block.s_blocks_per_group = getValueFromBytes(superblock_buf, 1024+32, 4);
+	
 	//Number of inodes per group
 	printf("Number of inodes per group: %d\n", getValueFromBytes(superblock_buf, 1024+40, 4));
 	super_block.s_inodes_per_group = getValueFromBytes(superblock_buf, 1024+40, 4);
@@ -503,11 +552,29 @@ void read_root_inode(partition_entry *partition) {
 	printf("\n*********end of root inode details*******\n");
 
 	//Root inode data block
-	//scan_dir_data_block(partition, first_data_block);
+	scan_dir_data_block(partition, first_data_block);
 	
 	//lions inode data block
-	inode_data lions_inode = read_inode(partition, 4019);
+	inode_data lions_inode = read_inode(partition, 4021);
 	scan_dir_data_block(partition, lions_inode.pointers_data_block[0]);
+	unsigned int j;
+	inode_data in = read_inode(partition, 4021);
+	/*char file_name[in.file_length];
+	i = 0;
+	for(j=0;j<in.file_length;j+=4) {
+    	file_name[j+3]=in.pointers_data_block[i]>>24&0xFF;
+		file_name[j+2]=in.pointers_data_block[i]>>16&0xFF;
+		file_name[j+1]=in.pointers_data_block[i]>>8&0xFF;
+		file_name[j]=in.pointers_data_block[i]&0xFF;
+		i++;
+    }
+	file_name[j] = '\0';
+	printf("filename: %s\n", file_name);*/
+	printf("\n\n File length: %d, File type: %02x, No of data blocks: %d\n", in.file_length, in.file_type, in.no_data_blocks);
+	for(i=0;i<15;i++) {
+		printf("Data block (Sector number), value in bitmap: %d (%d), %d\n", in.pointers_data_block[i], get_block_sector(partition, in.pointers_data_block[i]), check_block_bitmap(partition, in.pointers_data_block[i]));
+	}
+	printf("Data block count: %d\n", get_data_block_count(partition, in.pointers_data_block));
 }
 
 
