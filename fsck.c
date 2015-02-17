@@ -553,10 +553,14 @@ void read_root_inode(partition_entry *partition) {
 
 	//Root inode data block
 	scan_dir_data_block(partition, first_data_block);
-	
+
+	printf("------------------------\n");
+		
 	//lions inode data block
-	inode_data lions_inode = read_inode(partition, 4021);
+	inode_data lions_inode = read_inode(partition, 4017);
 	scan_dir_data_block(partition, lions_inode.pointers_data_block[0]);
+
+	printf("------------------------------------\n");
 	unsigned int j;
 	inode_data in = read_inode(partition, 4021);
 	/*char file_name[in.file_length];
