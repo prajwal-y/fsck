@@ -497,10 +497,24 @@ inode_data read_inode(partition_entry *partition, unsigned int inode_no) {
 *Check if the inode is set in inode bitmap (true=>1 and false=>0)
 */
 int check_inode_bitmap(partition_entry *partition, unsigned int inode_no) {
+	if(inode_no == 0)
+		return 0;
 	unsigned char inode_bitmap[1024];
-	unsigned int byte = inode_no/8;
-	unsigned int offset = 7-(inode_no%8);
-	return !(!(inode_bitmap[byte]&(1<<offset)));
+	unsigned int group_index = (inode_no-1)/super_block.s_inodes_per_group;
+    unsigned int inode_offset = (inode_no-1)%super_block.s_inodes_per_group;
+	//printf("group index, block_offset: %d, %d\n", group_index, block_offset);
+	//printf("block_no, block bitmap block number: %d, %d\n", block_no, getValueFromBytes(superblock_buf, 2048+(group_index*32)+0, 4));
+	unsigned int inode_bitmap_sector = get_block_sector(partition, getValueFromBytes(superblock_buf, 2048+(group_index*32)+4, 4));
+	read_sectors(inode_bitmap_sector, 1, inode_bitmap);
+	unsigned int byte = inode_offset/8;
+    unsigned int offset = 7-(inode_offset%8);
+    return !(!(inode_bitmap[byte]&(1<<offset)));
+}
+
+/*
+*set the value of the inode bitmap to the passed value
+*/
+void set_inode_bitmap(partition_entry *partition, unsigned int inode_no, int value) {
 }
 
 /*
