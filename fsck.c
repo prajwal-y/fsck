@@ -378,8 +378,10 @@ void scan_dir_data_block(partition_entry *partition, unsigned int block_no) {
 void write_inode_entry(partition_entry *partition, unsigned int inode_no) {
 	inode_data inode = read_inode(partition, lost_found_inode);
 	inode_data inode_cur = read_inode(partition, inode_no);
-	unsigned int block_no = read_data_blocks(partition, lost_found_inode, (block_size/sector_size_bytes), inode.pointers_data_block, 0, 0, 2);
+	int block_no = read_data_blocks(partition, lost_found_inode, (block_size/sector_size_bytes), inode.pointers_data_block, 0, 0, 2);
 	printf("block_no is %d\n", block_no);
+	if(block_no == -1)
+		return;
 	unsigned int block_sector = get_block_sector(partition, block_no);
 	unsigned char buf[block_size];
 	unsigned int i = 0;
