@@ -429,19 +429,6 @@ unsigned int parse_filesystem(partition_entry *partition, unsigned int block_no,
 		file_entry = (struct ext2_dir_entry_2 *)(buf+i);
 		//printf("inode, rec_len, name_len, file_type: %d, %d, %d, %d\n", file_entry->inode, file_entry->rec_len, file_entry->name_len, file_entry->file_type);
 
-		/*if(file_entry->inode == 0) {
-			printf("what the fuck! %d\n", (block_size - 1 - i));
-			if(perform_check) {
-				return -1;
-			}
-			else {
-				printf("what the fuck! %d\n", (block_size - 1 - i));
-				if((block_size - 1 - i) > 16) //Enough to save the inode entry in /lost+found
-					return block_no;
-				else
-					return -1;
-			}
-		}*/
 		if(file_entry->inode == 0)
 			return -1;
 		
@@ -453,7 +440,7 @@ unsigned int parse_filesystem(partition_entry *partition, unsigned int block_no,
 		}
 
 		//Pass 1: Checking correctness for "." and ".."
-		if(pass_no == 1 && perform_check) {
+		if(pass_no == 1 && perform_check == 1) {
 			//Check if "." or ".." has all correct entries
 			if(file_entry->inode != cur_inode && (strcmp(file_entry->name, ".")==0)) {
 				printf("current inode value is incorrect bro! %d and %d for %s\n", file_entry->inode, cur_inode, file_entry->name);
@@ -469,21 +456,25 @@ unsigned int parse_filesystem(partition_entry *partition, unsigned int block_no,
 			}
 		}
 
-		else if (pass_no == 2 && perform_check) {
+		else if (pass_no == 2 && perform_check == 1) {
 			inode_map[file_entry->inode] = 1;
 		}
-		else if (pass_no == 3 && perform_check) {
+		else if (pass_no == 3 && perform_check == 1) {
 			inode_link_count[file_entry->inode] += 1;
 		}		
-		else if (pass_no == 4 && perform_check) {
-			if(block_no == 2137 || block_no == 18225 || block_no == 15073 || block_no == 725)
-				printf("Block found in here 3: %d\n", block_no);
+		else if (pass_no == 4 && perform_check == 1) {
+			/*if(block_no == 2137 || block_no == 18225 || block_no == 15073 || block_no == 725)
+				printf("Block found in here 3: %d\n", block_no);*/
 			block_map[block_no] = 1;
 		}
 
 		//printf("Name: %s\n", file_entry->name);
 		//i = i + file_entry->rec_len;
-		if(strcmp(file_entry->name, ".") != 0 && strcmp(file_entry->name, "..") != 0 && perform_check) {
+		if(strcmp(file_entry->name, ".") != 0 && strcmp(file_entry->name, "..") != 0 && perform_check != 0) {
+			if(perform_check == 2) {
+				//printf("Fixing bitmap value in perform_check 2: %d\n", file_entry->inode);
+				inode_map[file_entry->inode] = 1;
+			}
 			inode_data inode = read_inode(partition, file_entry->inode);
 			//printf("inode type check: %x\n", (inode.file_type&0xF000));
 			if((inode.file_type & 0xF000) == 0x8000 && pass_no == 4) {
@@ -533,7 +524,7 @@ unsigned int read_indirect_data_blocks(partition_entry *partition,
 				ret_val = parse_filesystem(partition, block, pass_no, inode, p_inode, perform_check);
 			if(pass_no == 4) {
 				if(block == 2137 || block == 18225 || block == 15073 || block == 725) {
-                	printf("Block found in here 2: %d, %d, %d\n", block, inode, i);
+                	//printf("Block found in here 2: %d, %d, %d\n", block, inode, i);
 					//print_sector(buf);
 				}
 				//block_map[block] = 1;
@@ -563,7 +554,7 @@ unsigned int read_data_blocks(partition_entry *partition,
 		//printf("In read_data_blocks\n");
 		if(pointers[i] != 0) {
 			if(pointers[i] == 2137 || pointers[i] == 18225 || pointers[i] == 15073 || pointers[i] == 725)
-                printf("Block found in here 1: %d\n", pointers[i]);
+                //printf("Block found in here 1: %d\n", pointers[i]);
 			block_map[pointers[i]] = 1;
 			if(file_type != 1)
 				ret_val = parse_filesystem(partition, pointers[i], pass_no, inode, p_inode, perform_check);
@@ -847,11 +838,21 @@ void read_root_inode(partition_entry *partition) {
 	//read_data_blocks(partition, 2, 2, inode.pointers_data_block, 1, 1);
 	
 	//Pass 1
+	printf("-------Starting pass 1-------\n");
 	read_data_blocks(partition, 2, 2, inode.pointers_data_block, 1, 1, 2);
+	printf("-------Pass 1 done--------\n\n");
 
 	//Pass 2
+	printf("-------Starting pass 2-------\n");
 	read_data_blocks(partition, 2, 2, inode.pointers_data_block, 2, 1, 2);
-	for(i=1; i<=super_block.s_inodes_count; i++) {
+	for(i=11; i<=super_block.s_inodes_count; i++) {
+		inode_data in = read_inode(partition, i);
+		if(!(in.file_type&EXT2_S_IFDIR) == 0 && check_inode_bitmap(partition, i) == 1) {
+			printf("Going to fix this stuff!\n");
+			read_data_blocks(partition, i, -1, in.pointers_data_block, 0, 2, 2);
+		}
+	}
+	for(i=11; i<=super_block.s_inodes_count; i++) {
 		unsigned int bitmap_value = check_inode_bitmap(partition, i);
 		if(bitmap_value == 1 && inode_map[i] == 0) {
 			inode_data in = read_inode(partition, i);
@@ -865,8 +866,10 @@ void read_root_inode(partition_entry *partition) {
 	}
 	//need to repeat pass 1 to fix issues newly created
 	read_data_blocks(partition, 2, 2, inode.pointers_data_block, 1, 1, 2);
+	printf("-------Pass 2 done--------\n\n");
 
 	//Pass 3
+	printf("-------Starting pass 3 --------\n");
 	read_data_blocks(partition, 2, 2, inode.pointers_data_block, 3, 1, 2);
 	for(i=1; i<=super_block.s_inodes_count; i++) {
 		inode_data in = read_inode(partition, i);
@@ -876,12 +879,14 @@ void read_root_inode(partition_entry *partition) {
 				update_hard_link_counter(partition, i, inode_link_count[i]);
 		}
 	}
+	printf("-------Pass 3 done--------\n\n");
 
 
+	printf("-------Starting pass 4 --------\n");
 	//Pass 4
 	printf("running pass 4 bro! %d\n", super_block.s_blocks_count);
 	read_data_blocks(partition, 2, 2, inode.pointers_data_block, 4, 1, 2);
-	printf("done with this shit! %d and %d\n", block_map[15072], check_block_bitmap(partition, 15072));
+	//printf("done with this shit! %d and %d\n", block_map[15072], check_block_bitmap(partition, 15072));
 	for(i=1; i<=super_block.s_blocks_count; i++) {
         unsigned int bitmap_value = check_block_bitmap(partition, i);
 		//printf("bitmap value:%d, collected_value:%d\n", bitmap_value, block_map[i]);
@@ -898,6 +903,7 @@ void read_root_inode(partition_entry *partition) {
 			set_block_bitmap(partition, i, 1);
         }
     }
+	printf("-------Pass 4 done--------\n\n");
 	/*inode_data temp_i = read_inode(partition, 32);
 	printf("\n\n %d, %x, %d, %d\n", temp_i.inode_no, temp_i.file_type, temp_i.file_length, temp_i.pointers_data_block[0]);	*/
 	printf("------------------------\n");
