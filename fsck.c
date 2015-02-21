@@ -904,8 +904,10 @@ void read_root_inode(partition_entry *partition) {
 		/*if(block_map[i] == 1) {
 			printf("Am I even doing this right!? %d\n", i);
 		}*/
-		if(i == 84)
-			printf("i, bitmap_value and block_value: %d, %d, %d\n", i, check_block_bitmap(partition, i), block_map[i]);
+		if(i < 256 && check_block_bitmap(partition, i) == 0) {
+			//printf("i, bitmap_value and block_value: %d, %d, %d\n", i, check_block_bitmap(partition, i), block_map[i]);
+			set_block_bitmap(partition, i, 1); //hacky shit. Find out why!
+		}
         if(block_map[i] == 1 && bitmap_value != block_map[i]) {
             //inode_data in = read_inode(partition, i);
                // printf("Inode %d (type: 0x%x) is not correct bro! bitmap value:%d, collected_value:%d\n", i, in.file_type, bitmap_value, inode_map[i]);
