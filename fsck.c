@@ -780,7 +780,6 @@ void read_root_inode(partition_entry *partition) {
 	}
 	printf("-------Pass 3 done--------\n\n");
 
-
 	printf("-------Starting pass 4 --------\n");
 	//Pass 4
 	printf("running pass 4 bro! %d\n", super_block.s_blocks_count);
@@ -854,7 +853,13 @@ int main (int argc, char **argv)
 	if(fix_partition_no != -1 && fix_partition_no != 0) {
 		partition_entry *partition = get_partition_entry(entry, fix_partition_no);
 		read_superblock(partition);
+		inode_map = (unsigned int *)calloc(super_block.s_inodes_count, sizeof(unsigned int));
+        inode_link_count = (unsigned int *)calloc(super_block.s_inodes_count, sizeof(unsigned int));
+        block_map = (unsigned int *)calloc(super_block.s_blocks_count, sizeof(unsigned int));
 		read_root_inode(partition);
+		free(inode_map);
+        free(inode_link_count);
+        free(block_map);
 	}
 	else if(fix_partition_no == 0) {
 		partition_entry *temp = entry;
