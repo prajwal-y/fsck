@@ -325,29 +325,6 @@ unsigned int get_inode_starting_byte(unsigned int inode_no) {
 }
 
 /*
-*Scan though a directory and identify all files and directories within it.
-*/
-void scan_dir_data_block(partition_entry *partition, unsigned int block_no) {
-	unsigned char buf[block_size];
-	unsigned int i = 0, j;
-	read_sectors(get_block_sector(partition, block_no), (block_size/sector_size_bytes), buf);
-	while(i < block_size-1) {
-		struct ext2_dir_entry_2 file_entry;
-		file_entry.inode = (__u32)getValueFromBytes(buf, i+0, 4);
-		file_entry.rec_len = (__u16)getValueFromBytes(buf, i+4, 2);
-		file_entry.name_len = (__u8)buf[i+6];
-		file_entry.file_type = (__u8)buf[i+7];
-		printf("inode, rec_len, name_len, file_type: %d, %d, %d, %d\n", file_entry.inode, file_entry.rec_len, file_entry.name_len, file_entry.file_type);
-		for(j=0;j<file_entry.name_len;j++) {
-			file_entry.name[j]=buf[i+8+j];
-		}
-		file_entry.name[file_entry.name_len] = '\0';
-		printf("Name: %s\n", file_entry.name);
-		i = i + file_entry.rec_len;
-	}
-}
-
-/*
 * Write the unreferenced inode to /lost+found
 */
 void write_inode_entry(partition_entry *partition, unsigned int inode_no) {
@@ -554,18 +531,6 @@ void update_hard_link_counter(partition_entry *partition, unsigned int inode_no,
 	struct ext2_inode *inode = (struct ext2_inode *)(buf+temp);
 	inode->i_links_count = (__u16)hard_link_count;
 	write_sectors(inode_sector, (block_size/sector_size_bytes), buf);
-}
-
-void update_inode_entry_to_file(partition_entry *partition, unsigned int inode_no) {
-	char buf[block_size];
-    int i;
-    int inode_offset = get_inode_starting_byte(inode_no);
-    int inode_sector = get_block_sector(partition, inode_offset/block_size);
-    int temp = inode_offset-((inode_sector - partition->start_sector)*sector_size_bytes);
-    read_sectors(inode_sector, (block_size/sector_size_bytes), buf);
-    struct ext2_inode *inode = (struct ext2_inode *)(buf+temp);
-    inode->i_mode &= 0x80FF;
-    write_sectors(inode_sector, (block_size/sector_size_bytes), buf);
 }
 
 /*
