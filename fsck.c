@@ -794,7 +794,8 @@ int main (int argc, char **argv)
 	char *disk_image;
 	//Check if number of arguments is 5
 	if(argc < 5) {
-		fprintf(stderr, "Incorrect number of arguments. Usage:  ./myfsck -p <partition number> -i </path/to/disk/image>\n");
+		fprintf(stderr, "Incorrect number of arguments. \n");
+		fprintf(stderr, "Usage: Listing partition entries: ./myfsck -p <partition number> -i </path/to/disk/image>\n");
         fprintf(stderr, "Usage: Fixing errors in partition entries: ./myfsck -f <partition number> -i </path/to/disk/image>\n");
 		exit(EX_USAGE);
 	}
