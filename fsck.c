@@ -38,6 +38,8 @@ static struct ext2_super_block super_block;
 
 static unsigned int lost_found_inode = -1;
 
+static unsigned int first_root_data_block = -1;
+
 unsigned int *inode_map = NULL;
 unsigned int *inode_link_count = NULL;
 unsigned int *block_map = NULL;
@@ -222,6 +224,9 @@ void print_ll(partition_entry *node) {
 	printf("\n");
 }
 
+/*
+* Reads all the sector partitions and saves them using the struct partition_entry
+*/
 partition_entry *read_sector_partitions(int sector, int sector_offset) {
 
 	int i;
@@ -297,6 +302,9 @@ partition_entry *get_partition_entry(partition_entry *head, unsigned int partiti
 
 /****************************************************************/
 
+/*
+* Function to convert little endian 4/2 bytes to an unsigned integer.
+*/
 unsigned int getValueFromBytes(char *buf, int index, int size) {
 	if(size == 4)
 		return ((((int)buf[index+3]&0xFF) << 24) | (((int)buf[index+2]&0xFF) << 16) | (((int)buf[index+1]&0xFF) << 8) | ((int)buf[index])&0xFF);
@@ -304,16 +312,25 @@ unsigned int getValueFromBytes(char *buf, int index, int size) {
 		return ((((int)buf[index+1]&0xFF) << 8) | ((int)buf[index]&0xFF));
 }
 
+/*
+* Given an inode number, return the block number of the inode table where it exists.
+*/
 unsigned int get_inode_table_block_no(unsigned int inode_no) {
 	unsigned int group_index = (inode_no-1)/super_block.s_inodes_per_group;
 	unsigned int group_offset = (inode_no-1)%super_block.s_inodes_per_group;
 	return getValueFromBytes(superblock_buf, 1024+block_size+(group_index*32)+8, 4);
 }
 
+/*
+* Get the starting byte of a block number.
+*/
 unsigned int get_block_starting_byte(int block_no) {
 	return block_no * block_size;
 }
 
+/*
+* Given a block number, return the sector to read.
+*/
 unsigned int get_block_sector(partition_entry *partition, unsigned int block_no) {
 	return (partition->start_sector + (block_no*(block_size/sector_size_bytes)));
 }
@@ -331,7 +348,6 @@ void write_inode_entry(partition_entry *partition, unsigned int inode_no) {
 	inode_data inode = read_inode(partition, lost_found_inode);
 	inode_data inode_cur = read_inode(partition, inode_no);
 	int block_no = read_data_blocks(partition, lost_found_inode, (block_size/sector_size_bytes), inode.pointers_data_block, 0, 0, 2);
-	printf("block_no is %d\n", block_no);
 	if(block_no == -1)
 		return;
 	unsigned int block_sector = get_block_sector(partition, block_no);
@@ -343,9 +359,7 @@ void write_inode_entry(partition_entry *partition, unsigned int inode_no) {
 		if(file_entry->rec_len > ((((__u16)8 + file_entry->name_len)+3) & ~0x03)) {
 			//Change the size of the previous directory entry
 			file_entry->rec_len = (((__u16)8 + file_entry->name_len)+3) & ~0x03;
-			printf("new file entry length= %d\n", file_entry->rec_len);
 			i = i + file_entry->rec_len;
-			printf("new i: %d\n", i);
 			file_entry = (struct ext2_dir_entry_2*)(buf+i);
 			file_entry->inode = inode_no;
 			sprintf(file_entry->name, "%d", inode_no);
@@ -365,11 +379,16 @@ void write_inode_entry(partition_entry *partition, unsigned int inode_no) {
 }
 
 /*
-*Funtion to parse the directory entries in a file system recursively
-*if perform_check == 0, only the given directory is parsed.
-*Checks are performed only if perform_check == 1
+* Funtion to parse the directory entries in a file system recursively
+* if perform_check == 0, only the given directory is parsed.
+* Checks are performed only if perform_check == 1
 */
-unsigned int parse_filesystem(partition_entry *partition, unsigned int block_no, unsigned int pass_no, unsigned int cur_inode, unsigned int parent_inode, int perform_check) {	
+unsigned int parse_filesystem(partition_entry *partition, 
+								unsigned int block_no, 
+								unsigned int pass_no, 
+								unsigned int cur_inode, 
+								unsigned int parent_inode, 
+								int perform_check) {
 	unsigned char buf[block_size];
 	unsigned int i = 0, j;
 	struct ext2_dir_entry_2 *file_entry;
@@ -391,28 +410,27 @@ unsigned int parse_filesystem(partition_entry *partition, unsigned int block_no,
 		if(pass_no == 1 && perform_check == 1) {
 			//Check if "." or ".." has all correct entries
 			if(file_entry->inode != cur_inode && (strcmp(file_entry->name, ".")==0)) {
-				printf("current inode value is incorrect bro! %d and %d for %s\n", file_entry->inode, cur_inode, file_entry->name);
+				printf("Entry '.' has inode %d instead of %d\n. This will be fixed", file_entry->inode, cur_inode);
 				file_entry->inode = cur_inode;
-				printf("New inode to be changed: %d\n", getValueFromBytes(buf, i+0, 4));
 				write_sectors(block_sector, (block_size/sector_size_bytes), buf);
 			}
 			if(file_entry->inode != parent_inode && (strcmp(file_entry->name, "..")==0)) {
-				printf("parent inode value is incorrect bro! %d and %d for %s\n", file_entry->inode, parent_inode, file_entry->name);
+				printf("Entry '..' has inode %d instead of %d. This will be fixed.\n", file_entry->inode, parent_inode);
 				file_entry->inode = parent_inode;
-				printf("New inode to be changed: %d\n", getValueFromBytes(buf, i+0, 4));
                 write_sectors(block_sector, (block_size/sector_size_bytes), buf);
 			}
 		}
-
+		
+		//Pass 2: Save the inodes of the directory entries for inode bitmap checking
 		else if (pass_no == 2 && perform_check == 1) {
 			inode_map[file_entry->inode] = 1;
 		}
+		//Pass 3: Save the count for each inode.
 		else if (pass_no == 3 && perform_check == 1) {
 			inode_link_count[file_entry->inode] += 1;
 		}		
+		//Pass 4: Save the blocks for block bitmap checking
 		else if (pass_no == 4 && perform_check == 1) {
-			if(block_no == 8193)
-				printf("Block found in here 3: %d\n", block_no);
 			block_map[block_no] = 1;
 		}
 
@@ -421,8 +439,8 @@ unsigned int parse_filesystem(partition_entry *partition, unsigned int block_no,
 				inode_map[file_entry->inode] = 1;
 			}
 			inode_data inode = read_inode(partition, file_entry->inode);
-			//printf("inode type check: %x\n", (inode.file_type&0xF000));
-			if((inode.file_type & 0xF000) == 0x8000 && pass_no == 4) {
+			//If not a file, recursively parse directory entries of the new directory
+			if((inode.file_type & 0xF000) == EXT2_S_IFREG && pass_no == 4) {
 				read_data_blocks(partition, file_entry->inode, cur_inode, inode.pointers_data_block, pass_no, perform_check, 1);
 			}
 			else if(!(inode.file_type & EXT2_S_IFDIR) == 0){
@@ -431,7 +449,6 @@ unsigned int parse_filesystem(partition_entry *partition, unsigned int block_no,
 		}
 		i = i + file_entry->rec_len;
 	}
-	//SUPER UGLY! :(
 	if(file_entry != NULL && 
 		file_entry->rec_len > 8+file_entry->name_len && 
 		(file_entry->rec_len-8-file_entry->name_len)>16  
@@ -464,7 +481,7 @@ unsigned int read_indirect_data_blocks(partition_entry *partition,
 			ret_val = read_indirect_data_blocks(partition, inode, p_inode, block, indirection_level-1, pass_no, perform_check, file_type);
 		}
 		else if(indirection_level == 1 && block != 0) {
-			if(file_type != 1)	
+			if(file_type != 1) //If a directory, then recursively parse directory entries.	
 				ret_val = parse_filesystem(partition, block, pass_no, inode, p_inode, perform_check);
 			if(pass_no == 4) {
 				block_map[block] = 1;
@@ -489,7 +506,6 @@ unsigned int read_data_blocks(partition_entry *partition,
 								int pass_no, 
 								int perform_check,
 								int file_type) {
-	//UGLY CODE ALERT!
 	int count = 0, i = 0, ret_val = -1;
 	for(i = 0; i < 12; i++) {
 		if(pointers[i] != 0) {
@@ -601,10 +617,6 @@ int check_block_bitmap(partition_entry *partition, unsigned int block_no) {
     unsigned int block_offset = (block_no-1)%super_block.s_blocks_per_group;
 	unsigned int block_bitmap_sector = get_block_sector(partition, getValueFromBytes(superblock_buf, 1024+block_size+(group_index*32)+0, 4));
 	read_sectors(block_bitmap_sector, (block_size/sector_size_bytes), block_bitmap);
-	if(block_no == 84) {
-		printf("group index, block_offset, block_bitmap_sector, byte, block_bitmap[byte]: %d, %d, %d, %d, %x\n", group_index, block_offset, block_bitmap_sector, block_offset/8, block_bitmap[block_offset/8]);
-		printf("block_no, block bitmap block number: %d, %d\n", block_no, getValueFromBytes(superblock_buf, 2048+(group_index*32)+0, 4));
-	}
 	unsigned int byte = block_offset/8;
     unsigned int offset = (block_offset%8);
     return !(!(block_bitmap[byte]&(1<<offset)));
@@ -700,49 +712,21 @@ void read_superblock(partition_entry *partition) {
 	//Block number of the inode bitmap
 	printf("Block number of the inode bitmap: %d\n", getValueFromBytes(superblock_buf, 2048+4, 4));
 	//Block of the first inode table (9th byte in the group descriptor)
-	printf("\n************end of superblock details**********\n");
+	printf("************end of superblock details**********\n\n");
 }
 
 void read_root_inode(partition_entry *partition) {
-	printf("\n**********root inode details**********\n");
-
-	inode_data inode = read_inode(partition, 2);
-	//First data block
-	unsigned int first_data_block = inode.pointers_data_block[0];
-	printf("First data block: %d\n", first_data_block);
-	
-	//First data sector
-	unsigned int first_data_sector = get_block_sector(partition, first_data_block);
-	char data_buf[2*sector_size_bytes];
-	read_sectors(first_data_sector, (block_size/sector_size_bytes), data_buf);
-	//print_sector(data_buf);
-
-	struct ext2_dir_entry root_dir;
-	root_dir.inode = (__u32)getValueFromBytes(data_buf, 0, 4);
-	root_dir.rec_len = (__u16)getValueFromBytes(data_buf, 4, 2);
-	root_dir.name_len = (__u16)data_buf[6];
-	printf("inode, rec_len, name_len: %d, %d, %d\n", root_dir.inode, root_dir.rec_len, root_dir.name_len);
 	unsigned int i;
-	for(i=0;i<root_dir.name_len;i++) {
-		root_dir.name[root_dir.name_len-1-i]=data_buf[8+i];
-	}
-	root_dir.name[root_dir.name_len] = '\0';
-	printf("Name: %s\n", root_dir.name);
+	inode_data inode = read_inode(partition, 2);
 
-	char tt[5] = {'l', 'i', 'o', 'n', 's'};
-	for(i=0;i<sector_size_bytes;i++) {
-		if(tt[0] == data_buf[i] && tt[1]==data_buf[i+1] && tt[2]==data_buf[i+2] && tt[3]==data_buf[i+3] && tt[4]==data_buf[i+4]) {
-				printf("yay! %d\n", i);
-				break;
-		}
-	}
-
-	printf("\n*********end of root inode details*******\n");
+	block_size = 1 << (super_block.s_log_block_size + 10);
+	
+	first_root_data_block = inode.pointers_data_block[0];
 
 	//Pass 1
 	printf("-------Starting pass 1-------\n");
 	read_data_blocks(partition, 2, 2, inode.pointers_data_block, 1, 1, 2);
-	printf("-------Pass 1 done--------\n\n");
+	printf("-------Pass 1 done-----------\n\n");
 
 	//Pass 2
 	printf("-------Starting pass 2-------\n");
@@ -757,40 +741,40 @@ void read_root_inode(partition_entry *partition) {
 		unsigned int bitmap_value = check_inode_bitmap(partition, i);
 		if(bitmap_value == 1 && inode_map[i] == 0) {
 			inode_data in = read_inode(partition, i);
-			if(in.file_type != 0) { //Need to revisit this if condition
-				printf("Inode %d (type: 0x%x) is not correct bro! bitmap value:%d, collected_value:%d\n", i, in.file_type, bitmap_value, inode_map[i]);
+			if(in.file_type != 0) {
+				printf("Inode %d (type: 0x%x) has invalid entry in inode bitmap. Bitmap value:%d, collected value:%d. This will be fixed.\n", i, in.file_type, bitmap_value, inode_map[i]);
 				write_inode_entry(partition, i);
 			}
 		}
 	}
 	//need to repeat pass 1 to fix issues newly created
 	read_data_blocks(partition, 2, 2, inode.pointers_data_block, 1, 1, 2);
-	printf("-------Pass 2 done--------\n\n");
+	printf("-------Pass 2 done-----------\n\n");
 
 	//Pass 3
-	printf("-------Starting pass 3 --------\n");
+	printf("-------Starting pass 3--------\n");
 	read_data_blocks(partition, 2, 2, inode.pointers_data_block, 3, 1, 2);
 	for(i=1; i<=super_block.s_inodes_count; i++) {
 		inode_data in = read_inode(partition, i);
 		if(inode_link_count[i] != in.no_hard_links) {
 			if(in.file_type != 0)
-				printf("Inode %d (type: 0x%x) is not correct bro! Actual value:%d, collected_value:%d\n", i, in.file_type, in.no_hard_links, inode_link_count[i]);
+				printf("Inode %d (type: 0x%x) has invalid inode count in the inode entry. Current value in inode entry:%d, collected value:%d. This will be fixed.\n", i, in.file_type, in.no_hard_links, inode_link_count[i]);
 				update_hard_link_counter(partition, i, inode_link_count[i]);
 		}
 	}
 	printf("-------Pass 3 done--------\n\n");
 
-	printf("-------Starting pass 4 --------\n");
+	printf("-------Starting pass 4--------\n");
 	//Pass 4
-	printf("running pass 4 bro! %d\n", super_block.s_blocks_count);
 	read_data_blocks(partition, 2, 2, inode.pointers_data_block, 4, 1, 2);
 	for(i=1; i<=super_block.s_blocks_count; i++) {
         unsigned int bitmap_value = check_block_bitmap(partition, i);
-		if(i < 256 && check_block_bitmap(partition, i) == 0) {
-			set_block_bitmap(partition, i, 1); //hacky shit. Find out why!
+		if(i < first_root_data_block && check_block_bitmap(partition, i) == 0) {
+			printf("Block %d has invalid entry in block bitmap. Bitmap value: 0, collected value: 1. This will be fixed.\n", i);
+			set_block_bitmap(partition, i, 1);
 		}
         if(block_map[i] == 1 && bitmap_value != block_map[i]) {
-			printf("Block: %d bitmap value:%d, collected_value:%d\n", i, bitmap_value, block_map[i]);
+			printf("Block %d has invalid entry in block bitmap. Bitmap value: %d, collected value: %d. This will be fixed.\n", i, bitmap_value, block_map[i]);
 			set_block_bitmap(partition, i, 1);
         }
     }
@@ -834,7 +818,7 @@ int main (int argc, char **argv)
 
     if ((device = open(disk_image, O_RDWR)) == -1) {
         perror("Could not open device file");
-        exit(-1);
+        exit(EX_IOERR);
     }
 
 	partition_entry *entry = read_sector_partitions(0, 0);
@@ -846,12 +830,16 @@ int main (int argc, char **argv)
 		}
 		else {
 			printf("-1\n");
-	        return EX_DATAERR;
+	        exit(EX_DATAERR);
 		}
 	}
 
 	if(fix_partition_no != -1 && fix_partition_no != 0) {
 		partition_entry *partition = get_partition_entry(entry, fix_partition_no);
+		if(partition == NULL || partition->type != 0x83) {
+			printf("Partition number is incorrect or the partition is not an ext2 partition\n");
+			exit(EX_DATAERR);
+		}
 		read_superblock(partition);
 		inode_map = (unsigned int *)calloc(super_block.s_inodes_count, sizeof(unsigned int));
         inode_link_count = (unsigned int *)calloc(super_block.s_inodes_count, sizeof(unsigned int));
@@ -864,7 +852,6 @@ int main (int argc, char **argv)
 	else if(fix_partition_no == 0) {
 		partition_entry *temp = entry;
 		while(temp != NULL) {
-			printf("%02x, %d\n", temp->type, (temp->type == 0x83));
 			if(temp->type == 0x83) {
 				read_superblock(temp);
 				inode_map = (unsigned int *)calloc(super_block.s_inodes_count, sizeof(unsigned int));
